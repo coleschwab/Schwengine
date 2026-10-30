@@ -1,5 +1,7 @@
 # Schwengine ⚙️
 
+Note: Schwengine is currently in active architectural development. Asset loading and file paths are currently statically linked to facilitate rapid iteration on the core Vulkan rendering and memory pipelines.
+
 A custom 3D graphics rendering engine built entirely from scratch in C++ and Vulkan. 
 
 ## Architecture & Features
