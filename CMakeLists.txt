@@ -16,8 +16,8 @@ set(SOURCES
     renderer/VulkanContext.cpp
     renderer/Pipeline.cpp
     renderer/Descriptors.cpp
-    renderer/tiny_obj_loader.cpp
-    renderer/stb_image.cpp
+    vendor/tiny_obj_loader.cpp
+    vendor/stb_image.cpp
 )
 
 set(HEADERS

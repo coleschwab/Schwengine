@@ -17,6 +17,8 @@ struct TransformComponent {
 };
 
 // 2. Hierarchy Data (The Scene Graph)
+// Implemented as an intrusive linked list to guarantee flat memory 
+// and completely avoid per-entity dynamic heap allocations.
 struct HierarchyComponent {
     Entity parent = MAX_ENTITIES;
     Entity firstChild = MAX_ENTITIES;

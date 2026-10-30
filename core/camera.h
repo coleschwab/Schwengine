@@ -9,10 +9,11 @@ public:
     void update(float dt);
     Matrix4x4 getViewMatrix();
 
-    // Add a getter so main.cpp or ImGui could check the state
-    bool isUIModeActive() const { return uiMode; }
+    Vector4 getMouseRay(float mouseX, float mouseY, float screenWidth, float screenHeight, const Matrix4x4& projMatrix);
 
+    bool isUIModeActive() const { return uiMode; }
     float* getSensitivityPtr() { return &mouseSensitivity; }
+
 
 private:
     Vector4 position;

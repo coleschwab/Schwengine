@@ -103,8 +103,15 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
         }
         ImGui::End();
 
+        // ------------------------------------------------------------------
         // --- 8. ECS TRANSFORM SYSTEM ---
-        for (Entity i = 0; i < registry.transforms.size(); ++i) {   
+        // CURRENT STATE: Utilizes a flat array iteration for optimal CPU cache coherency.
+        // ARCHITECTURE NOTE: For this flat loop to be mathematically stable without 1-frame lag, 
+        // the ECS parallel arrays must be Topologically Sorted (ensuring parent indices 
+        // are always strictly lower than child indices). 
+        // TODO: Implement a topological sort swap upon entity parenting (attachEntity).
+        // ------------------------------------------------------------------
+        for (Entity i = 0; i < registry.transforms.size(); ++i) {
             if (!registry.meshes[i].isVisible) continue;
 
             Matrix4x4 localMat = registry.transforms[i].getLocalMatrix();

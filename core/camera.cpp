@@ -1,7 +1,12 @@
 #include "Camera.h"
 #include <windows.h>
 #include "MathUtils.h"
-
+// ------------------------------------------------------------------
+// Camera System
+// Utilizes direct Win32 API hooks for raw cursor center-locking to 
+// avoid delta-drift. Forward vectors are calculated natively using 
+// custom Euler angle math (Pitch/Yaw) mapped directly to Vulkan's coordinate system.
+// ------------------------------------------------------------------
 Camera::Camera() {
     position = { 0.0f, 0.0f, 10.0f, 1.0f }; // Starting 5 units back
     forward = { 0.0f, 0.0f, -1.0f, 0.0f }; // Looking toward the origin
@@ -102,4 +107,25 @@ Matrix4x4 Camera::getViewMatrix() {
     // The target is simply the camera's position plus its forward direction
     Vector4 target = position + forward;
     return Matrix4x4::LookAt(position, target, up);
+}
+
+Vector4 Camera::getMouseRay(float mouseX, float mouseY, float screenWidth, float screenHeight, const Matrix4x4& projMatrix) {
+    // 1. Convert to Normalized Device Coordinates (NDC) [-1 to 1]
+    float x = (2.0f * mouseX) / screenWidth - 1.0f;
+
+    // VULKAN SPECIFIC: Flip the Y-coordinate. 
+    // ImGui/Win32 reads Y from top-to-bottom, but NDC expects bottom-to-top.
+    float y = 1.0f - (2.0f * mouseY) / screenHeight;
+
+    // 2. Clip Space (Z points into the screen)
+    Vector4 rayClip(x, y, -1.0f, 1.0f);
+
+    // 3. Eye (View) Space
+    Vector4 rayEye = projMatrix.Inverse() * rayClip;
+    rayEye.z = -1.0f; // Force it to point forward
+    rayEye.w = 0.0f;  // It is a direction, not a point
+
+    // 4. World Space
+    Vector4 rayWorld = this->getViewMatrix().Inverse() * rayEye;
+    return rayWorld.normalize();
 }
