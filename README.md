@@ -6,6 +6,10 @@ A custom 3D graphics rendering engine built entirely from scratch in C++ and Vul
 
 ---
 
+<img width="1277" height="798" alt="Screenshot 2026-11-15 234707" src="https://github.com/user-attachments/assets/37f06269-aa86-4205-9169-95bd7719c13d" />
+
+---
+
 ## Architecture & Features
 To deepen understanding of graphics programming and low-level memory management, this engine intentionally avoids standard heavy math libraries (like GLM) in favor of native implementations.
 
