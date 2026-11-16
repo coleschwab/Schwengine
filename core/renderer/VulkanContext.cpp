@@ -51,6 +51,7 @@ ModelData loadModel(const std::string& filepath, float scale) {
 
     // --- EXTRACT EMBEDDED IMAGES ---
     for (cgltf_size i = 0; i < data->images_count; ++i) {
+        std::cout << "Decompressing texture " << (i + 1) << " of " << data->images_count << "..." << std::endl;
         cgltf_image* image = &data->images[i];
         TextureData texData{ nullptr, 0, 0, 0 };
 
@@ -71,6 +72,9 @@ ModelData loadModel(const std::string& filepath, float scale) {
 
     // 1. Loop through the NODES, not the raw meshes!
     for (cgltf_size i = 0; i < data->nodes_count; ++i) {
+        if (i % 50 == 0) { // Print every 50 nodes to avoid spamming the console too hard
+            std::cout << "Parsing 3D geometry node " << i << " of " << data->nodes_count << "..." << std::endl;
+        }
         cgltf_node* node = &data->nodes[i];
 
         // Skip nodes that don't contain geometry (like cameras or empty attachment points)
@@ -105,7 +109,8 @@ ModelData loadModel(const std::string& filepath, float scale) {
             SubMesh subMesh{};
             subMesh.startIndex = indexOffset;
             subMesh.indexCount = static_cast<uint32_t>(primitive->indices->count);
-            subMesh.textureIndex = 0; // Default fallback
+            subMesh.textureIndex = UINT32_MAX; // Default fallback
+            subMesh.emissiveIndex = UINT32_MAX;
 
             // --- NEW: Default to white if the artist didn't specify a color ---
             float matColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -119,7 +124,19 @@ ModelData loadModel(const std::string& filepath, float scale) {
                     subMesh.textureIndex = static_cast<uint32_t>(baseColorTex->texture->image - data->images);
                 }
 
-                // 2. Check for Mathematical Paint Colors (Car body panels)
+                if (primitive->material->emissive_texture.texture && primitive->material->emissive_texture.texture->image) {
+                    subMesh.emissiveIndex = static_cast<uint32_t>(primitive->material->emissive_texture.texture->image - data->images);
+                }
+
+                if (primitive->material->occlusion_texture.texture && primitive->material->occlusion_texture.texture->image) {
+                    subMesh.aoIndex = static_cast<uint32_t>(primitive->material->occlusion_texture.texture->image - data->images);
+                }
+
+                if (primitive->material->normal_texture.texture && primitive->material->normal_texture.texture->image) {
+                    subMesh.normalIndex = static_cast<uint32_t>(primitive->material->normal_texture.texture->image - data->images);
+                }
+
+                // 2. Check for Mathematical Paint Colors 
                 cgltf_float* factor = primitive->material->pbr_metallic_roughness.base_color_factor;
                 matColor[0] = factor[0];
                 matColor[1] = factor[1];
@@ -229,6 +246,18 @@ VulkanContext::~VulkanContext() {
     cleanupTexture();
     cleanupSwapChain();
 
+    // Free all dynamically loaded 3D models in the warehouse
+    for (auto& mesh : loadedMeshes) {
+        if (mesh.vertexBuffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, mesh.vertexBuffer, nullptr);
+            vkFreeMemory(device, mesh.vertexMemory, nullptr);
+        }
+        if (mesh.indexBuffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, mesh.indexBuffer, nullptr);
+            vkFreeMemory(device, mesh.indexMemory, nullptr);
+        }
+    }
+
     for (auto it = deletionQueue.rbegin(); it != deletionQueue.rend(); ++it) {
         (*it)();
     }
@@ -278,6 +307,18 @@ void VulkanContext::initVulkan(HWND hwnd) {
     // 1. Create uniform buffers first
     createUniformBuffers();
 
+    if (textureSampler == VK_NULL_HANDLE) {
+        createTextureSampler();
+    }
+    if (textureImageViews.empty()) {
+        createTextureImage(nullptr, 1, 1); // Creates the 1x1 emergency magenta pixel
+    }
+
+    std::vector<VkImageView> paddedViews = textureImageViews;
+    while (paddedViews.size() < 1024) {
+        paddedViews.push_back(paddedViews[0]);
+    }
+
     // 2. Initialize Descriptors BEFORE loading the mesh!
     // Note: We safely pass VK_NULL_HANDLE for the sampler here because 
     // loadMeshIntoBuffer will create the real one in a millisecond.
@@ -286,8 +327,12 @@ void VulkanContext::initVulkan(HWND hwnd) {
         activeImageCount,
         uniformBuffers.data(),
         sizeof(UniformBufferObject),
-        std::vector<VkImageView>{},
-        VK_NULL_HANDLE
+        lightBuffers.data(),
+        sizeof(LightBufferObject),
+        instanceBuffers.data(),       
+        sizeof(InstanceData) * 50000,  
+        paddedViews,
+        textureSampler
     );
 
     // --- END REORDERED SECTION ---
@@ -387,14 +432,26 @@ void VulkanContext::createLogicalDevice() {
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
-    VkPhysicalDeviceFeatures deviceFeatures{};
-    deviceFeatures.tessellationShader = VK_TRUE;
+    // 1. Authorize the massive Bindless Texture Array
+    VkPhysicalDeviceVulkan12Features features12{};
+    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    features12.runtimeDescriptorArray = VK_TRUE;
+    features12.descriptorBindingPartiallyBound = VK_TRUE;
+
+    // 2. Chain it to the standard features
+    VkPhysicalDeviceFeatures2 deviceFeatures2{};
+    deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    deviceFeatures2.pNext = &features12;
+    deviceFeatures2.features.tessellationShader = VK_TRUE;
+    deviceFeatures2.features.samplerAnisotropy = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.pQueueCreateInfos = &queueCreateInfo;
     createInfo.queueCreateInfoCount = 1;
-    createInfo.pEnabledFeatures = &deviceFeatures;
+    createInfo.pNext = &deviceFeatures2;   // <-- Attach the features here
+    createInfo.pEnabledFeatures = nullptr; // <-- MUST be nullptr when using pNext!
     createInfo.enabledExtensionCount = 1;
     createInfo.ppEnabledExtensionNames = deviceExtensions;
 
@@ -768,55 +825,134 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
     VkRect2D scissor{ {0, 0}, swapChainExtent };
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    // 1. Bind global descriptor sets (Camera matrices, textures)
     VkDescriptorSet activeSet = descriptors->getSet(imageIndex);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getLayout(), 0, 1, &activeSet, 0, nullptr);
 
-    // === PHASE 3: THE MULTI-OBJECT DRAW LOOP ===
     struct PushConstantData {
         Matrix4x4 modelMatrix;
         uint32_t textureIndex;
+        uint32_t emissiveIndex;
+        uint32_t aoIndex;
+        uint32_t normalIndex;
     };
 
-    // 2. Loop over every object dynamically spawned by the ECS
+    // 1. Declare static vectors to stop heap thrashing
+    static std::unordered_map<uint32_t, std::vector<InstanceData>> batchedInstances;
+    static std::vector<InstanceData> flatInstanceBuffer;
+
+    // 2. Clear out the previous frame without losing the allocated memory capacity
+    for (auto& pair : batchedInstances) {
+        pair.second.clear();
+    }
+    flatInstanceBuffer.clear();
+
+    // 3. Group instances by mesh ID
     for (const auto& obj : sceneObjects) {
+        batchedInstances[obj.meshID].push_back({
+            obj.transform,
+            0,
+            {0.0f, 0.0f, 0.0f}
+            });
+    }
 
-        // Failsafe: Don't draw if the mesh ID is invalid
-        if (obj.meshID >= loadedMeshes.size()) continue;
+    // 4. Flatten the map into a single array
+    flatInstanceBuffer.reserve(sceneObjects.size());
+    for (const auto& pair : batchedInstances) {
+        flatInstanceBuffer.insert(flatInstanceBuffer.end(), pair.second.begin(), pair.second.end());
+    }
 
-        // 3. Grab the specific model from the VRAM warehouse
-        const VulkanMesh& mesh = loadedMeshes[obj.meshID];
+    // 5. Copy safely to the GPU
+    if (!flatInstanceBuffer.empty()) {
+        size_t dataSize = flatInstanceBuffer.size() * sizeof(InstanceData);
+        size_t maxCapacity = 50000 * sizeof(InstanceData);
 
-        // 4. Bind this specific model's geometry to the GPU
+        if (dataSize > maxCapacity) {
+            std::cout << "WARNING: Capping instances to fit VRAM." << std::endl;
+            dataSize = maxCapacity;
+        }
+
+        // Failsafe: If the pointer is null, DO NOT ATTEMPT TO COPY
+        if (instanceBuffersMapped[imageIndex] == nullptr) {
+            std::cout << "CRITICAL ERROR: instanceBuffersMapped[" << imageIndex << "] is NULL!" << std::endl;
+            vkCmdEndRenderPass(commandBuffer);
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to end recording command buffer!");
+            }
+            return;
+        }
+
+        memcpy(instanceBuffersMapped[imageIndex], flatInstanceBuffer.data(), dataSize);
+    }
+
+    uint32_t currentInstanceOffset = 0;
+
+    // 6. Draw the batched instances
+    for (const auto& pair : batchedInstances) {
+        uint32_t meshID = pair.first;
+        const auto& instances = pair.second;
+
+        if (meshID >= loadedMeshes.size()) continue;
+
+        VulkanMesh& mesh = loadedMeshes[meshID];
+        uint32_t instanceCount = static_cast<uint32_t>(instances.size());
+
+        // Skip if this mesh has no active instances this frame
+        if (instanceCount == 0) continue;
+
         VkBuffer vertexBuffers[] = { mesh.vertexBuffer };
         VkDeviceSize offsets[] = { 0 };
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(commandBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-        // 5. Loop over the sub-meshes (materials) of this specific model
         for (const auto& subMesh : mesh.subMeshes) {
-
             PushConstantData pushData{};
-            pushData.modelMatrix = obj.transform;
-            pushData.textureIndex = subMesh.textureIndex;
+            pushData.modelMatrix = Matrix4x4();
 
-            vkCmdPushConstants(
-                commandBuffer,
-                graphicsPipeline->getLayout(),
+            // 1. Safely route the Base Texture Index
+            if (subMesh.textureIndex >= 1024) {
+                pushData.textureIndex = 0; // Route safe to the dummy pixel
+            }
+            else {
+                pushData.textureIndex = subMesh.textureIndex;
+            }
+
+            // 2. Safely route the Emissive (Glow) Index
+            if (subMesh.emissiveIndex >= 1024) {
+                pushData.emissiveIndex = 0;
+            }
+            else {
+                pushData.emissiveIndex = subMesh.emissiveIndex;
+            }
+
+            // 3. Safely route the Ambient Occlusion (AO) Index
+            if (subMesh.aoIndex >= 1024) {
+                pushData.aoIndex = 0;
+            }
+            else {
+                pushData.aoIndex = subMesh.aoIndex;
+            }
+
+            // 4. Safely route the Normal (Bump) Index
+            if (subMesh.normalIndex >= 1024) {
+                pushData.normalIndex = 0;
+            }
+            else {
+                pushData.normalIndex = subMesh.normalIndex;
+            }
+
+            // 5. Push all 80 bytes to the GPU
+            vkCmdPushConstants(commandBuffer, graphicsPipeline->getLayout(),
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0,
-                sizeof(PushConstantData),
-                &pushData
-            );
+                0, sizeof(PushConstantData), &pushData);
 
-            // DRAW IT!
-            vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, 1, subMesh.startIndex, 0, 0);
+            vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, instanceCount, subMesh.startIndex, 0, currentInstanceOffset);
         }
+
+        currentInstanceOffset += instanceCount;
     }
-    ImDrawData* draw_data = ImGui::GetDrawData();
-    if (draw_data) {
-        ImGui_ImplVulkan_RenderDrawData(draw_data, commandBuffer);
-    }
+
+    // 7. Draw UI and End Pass
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1020,7 +1156,35 @@ uint32_t VulkanContext::uploadMesh(const std::string& filename) {
 
     // 4. FIX TRAP 2: Shift the sub-mesh texture indices to match global VRAM!
     for (auto& subMesh : newMesh.subMeshes) {
-        subMesh.textureIndex += globalTextureOffset;
+        if (subMesh.textureIndex == UINT32_MAX) {
+            // This part has no texture! Point it directly to our 1x1 dummy pixel at index 0.
+            subMesh.textureIndex = 0;
+        }
+        else {
+            // This part has a valid texture! Shift it by the global offset.
+            subMesh.textureIndex += globalTextureOffset;
+        }
+
+        if (subMesh.emissiveIndex == UINT32_MAX) {
+            subMesh.emissiveIndex = 0; // Route to white dummy pixel
+        }
+        else {
+            subMesh.emissiveIndex += globalTextureOffset;
+        }
+
+        if (subMesh.aoIndex == UINT32_MAX) {
+            subMesh.aoIndex = 0;
+        }
+        else {
+            subMesh.aoIndex += globalTextureOffset;
+        }
+
+        if (subMesh.normalIndex == UINT32_MAX) {
+            subMesh.normalIndex = 0;
+        }
+        else {
+            subMesh.normalIndex += globalTextureOffset;
+        }
     }
 
     // 5. Rebuild descriptors safely
@@ -1030,6 +1194,7 @@ uint32_t VulkanContext::uploadMesh(const std::string& filename) {
         if (textureSampler == VK_NULL_HANDLE) {
             createTextureSampler();
         }
+
 
         // FIX TRAP 3: Enforce a strict ceiling so large models don't crash the engine!
         const size_t MAX_SHADER_TEXTURES = 1024; // This must match your shader.frag array limit
@@ -1052,8 +1217,12 @@ uint32_t VulkanContext::uploadMesh(const std::string& filename) {
             activeImageCount,
             uniformBuffers.data(),
             sizeof(UniformBufferObject),
-            paddedViews, // Safe, clamped array
-            textureSampler
+            lightBuffers.data(),
+            sizeof(LightBufferObject),
+            instanceBuffers.data(),        
+            sizeof(InstanceData) * 50000,  
+            paddedViews,                 
+            textureSampler                 
         );
 
         rebuildPipelines(); // Inform the graphics pipeline of the new layout
@@ -1069,15 +1238,33 @@ uint32_t VulkanContext::uploadMesh(const std::string& filename) {
 
 void VulkanContext::createUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+    VkDeviceSize lightBufferSize = sizeof(LightBufferObject);
+    VkDeviceSize instanceBufferSize = sizeof(InstanceData) * 50000; // Capacity for 50k entities
     for (unsigned int i = 0; i < activeImageCount; i++) {
         createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             uniformBuffers[i], uniformBuffersMemory[i]);
 
+        createBuffer(lightBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            lightBuffers[i], lightBuffersMemory[i]);
+
+        createBuffer(instanceBufferSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            instanceBuffers[i],
+            instanceBuffersMemory[i]);
+
+        vkMapMemory(device, instanceBuffersMemory[i], 0, instanceBufferSize, 0, &instanceBuffersMapped[i]);
+
         // === FIXED: Added missing persistent cleanup hooks for active swapchain instances ===
         deletionQueue.push_back([this, i]() {
             vkDestroyBuffer(device, uniformBuffers[i], nullptr);
             vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+            vkDestroyBuffer(device, lightBuffers[i], nullptr);
+            vkFreeMemory(device, lightBuffersMemory[i], nullptr);
+            vkDestroyBuffer(device, instanceBuffers[i], nullptr);
+            vkFreeMemory(device, instanceBuffersMemory[i], nullptr);
             });
     }
 }
@@ -1355,10 +1542,10 @@ void VulkanContext::createTextureImage(unsigned char* pixels, int texWidth, int 
 
     // Failsafe: If the pixels are null, generate the emergency magenta pixel
     if (!pixels) {
-        std::cout << "CRITICAL: glTF texture missing! Generating emergency magenta pixel." << std::endl;
+        std::cout << "CRITICAL: glTF texture missing! Generating emergency white pixel." << std::endl;
         texWidth = 1;
         texHeight = 1;
-        pixels = new stbi_uc[4]{ 255, 0, 255, 255 };
+        pixels = new stbi_uc[4]{ 255, 255, 255, 255 };
         usingGeneratedTexture = true;
     }
 

@@ -89,14 +89,14 @@ struct Matrix4x4 {
         return inv;
     }
 
-    Vector4 multiply(const Vector4& v) const {
+    Vector4 operator*(const Vector4& v) const {
         Vector4 result;
         result.x = m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12] * v.w;
         result.y = m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13] * v.w;
         result.z = m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14] * v.w;
         result.w = m[3] * v.x + m[7] * v.y + m[11] * v.z + m[15] * v.w;
         return result;
-    };
+    }
 
     Matrix4x4 operator*(const Matrix4x4& other) const {
         Matrix4x4 res;
@@ -135,6 +135,7 @@ struct Matrix4x4 {
         // VULKAN SPECIFIC: Depth range is [0, 1], not OpenGL's [-1, 1]
         res.m[10] = farP / (nearP - farP);
         res.m[11] = -1.0f;
+
         res.m[14] = (nearP * farP) / (nearP - farP);
 
         return res;

@@ -31,3 +31,21 @@ struct MeshComponent {
     uint32_t meshID = 0;
     bool isVisible = true;
 };
+
+#pragma once
+#include "Vector4.h"
+
+struct PointLight {
+    Vector4 position;
+    Vector4 color;
+
+    PointLight(Vector4 p = Vector4(0.0f, 0.0f, 0.0f, 0.0f), Vector4 c = Vector4(0.0f, 0.0f, 0.0f, 0.0f))
+        : position(p), color(c) {
+    }
+};
+
+struct InstanceData {
+    Matrix4x4 modelMatrix; // 64 bytes
+    uint32_t textureIndex; // 4 bytes
+    float padding[3];      // 12 bytes of padding to align to 16 bytes
+};

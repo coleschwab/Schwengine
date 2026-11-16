@@ -3,6 +3,8 @@
 #include <queue>
 #include "Types.h"
 #include "Components.h"
+
+
 // ------------------------------------------------------------------
 // ECS Registry
 // Utilizes a strict Structure of Arrays (SoA) layout for cache-friendly 
@@ -18,11 +20,11 @@ public:
     std::vector<TransformComponent> transforms;
     std::vector<HierarchyComponent> hierarchies;
     std::vector<MeshComponent> meshes;
+
+    // NEW: Parallel array for point lights
+    std::vector<PointLight> pointLights;
+
     // Creates a new entity and aligns parallel arrays.
-    // Architecture Note: Currently uses strict index-matching (1:1 component to entity ratio). 
-    // Future optimization: Implement sparse sets to reduce memory footprint for entities 
-    // that do not require all component types.
-    Entity createEntity() {
     Entity createEntity() {
         Entity id;
         if (!freeIds.empty()) {
@@ -32,12 +34,17 @@ public:
             transforms[id] = TransformComponent();
             hierarchies[id] = HierarchyComponent();
             meshes[id] = MeshComponent();
+
+            pointLights[id] = PointLight();
         }
         else {
             id = nextEntityId++;
             transforms.push_back(TransformComponent());
             hierarchies.push_back(HierarchyComponent());
             meshes.push_back(MeshComponent());
+
+            // Push a blank light to keep the array sizes perfectly 1:1
+            pointLights.push_back(PointLight());
         }
         return id;
     }

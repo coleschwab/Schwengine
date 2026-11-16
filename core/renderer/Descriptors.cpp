@@ -3,8 +3,17 @@
 #include <array>
 #include <iostream>
 
-Descriptors::Descriptors(VkDevice device, uint32_t activeImageCount, VkBuffer* uniformBuffers, VkDeviceSize uboSize, const std::vector<VkImageView>& imageViews, VkSampler sampler)
-    : device(device), activeImageCount(activeImageCount), uniformBuffers(uniformBuffers), uboSize(uboSize) {
+// Added instanceBuffers and instanceBufferSize to the constructor
+Descriptors::Descriptors(VkDevice device, uint32_t activeImageCount,
+    VkBuffer* uniformBuffers, VkDeviceSize uboSize,
+    VkBuffer* lightBuffers, VkDeviceSize lightBufferSize,
+    VkBuffer* instanceBuffers, VkDeviceSize instanceBufferSize,
+    const std::vector<VkImageView>& imageViews, VkSampler sampler)
+    : device(device), activeImageCount(activeImageCount),
+    uniformBuffers(uniformBuffers), uboSize(uboSize),
+    lightBuffers(lightBuffers), lightBufferSize(lightBufferSize),
+    instanceBuffers(instanceBuffers), instanceBufferSize(instanceBufferSize) {
+
     createDescriptorSetLayout();
     createDescriptorPool();
     createDescriptorSets(imageViews, sampler);
@@ -24,12 +33,28 @@ void Descriptors::createDescriptorSetLayout() {
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorCount = 16; // <--- UPGRADED TO 16 TEXTURES!
+    samplerLayoutBinding.descriptorCount = 1024;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerLayoutBinding };
+    VkDescriptorSetLayoutBinding lightLayoutBinding{};
+    lightLayoutBinding.binding = 2;
+    lightLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    lightLayoutBinding.descriptorCount = 1;
+    lightLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 3: Instance SSBO
+    VkDescriptorSetLayoutBinding instanceLayoutBinding{};
+    instanceLayoutBinding.binding = 3;
+    instanceLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    instanceLayoutBinding.descriptorCount = 1;
+    instanceLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    // Group all 4 bindings into a single array BEFORE creating the layout
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {
+        uboLayoutBinding, samplerLayoutBinding, lightLayoutBinding, instanceLayoutBinding
+    };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -42,11 +67,18 @@ void Descriptors::createDescriptorSetLayout() {
 }
 
 void Descriptors::createDescriptorPool() {
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    // Increased array size to 3 for the 3 different types of descriptors
+    std::array<VkDescriptorPoolSize, 3> poolSizes{};
+
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = activeImageCount;
+    poolSizes[0].descriptorCount = activeImageCount * 2; // MVP + Lights
+
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = activeImageCount * 16; // <--- UPGRADED POOL CAPACITY!
+    poolSizes[1].descriptorCount = activeImageCount * 1024; // Textures
+
+    // Add capacity for the Storage Buffer
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = activeImageCount;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -87,16 +119,26 @@ void Descriptors::updateTextures(const std::vector<VkImageView>& imageViews, VkS
         bufferInfo.offset = 0;
         bufferInfo.range = uboSize;
 
-        // Prepare an array of 16 Image Infos
-        std::vector<VkDescriptorImageInfo> imageInfos(16);
-        for (size_t j = 0; j < 16; j++) {
+        VkDescriptorBufferInfo lightInfo{};
+        lightInfo.buffer = lightBuffers[i];
+        lightInfo.offset = 0;
+        lightInfo.range = lightBufferSize;
+
+        // Instance Buffer Info
+        VkDescriptorBufferInfo instanceInfo{};
+        instanceInfo.buffer = instanceBuffers[i];
+        instanceInfo.offset = 0;
+        instanceInfo.range = instanceBufferSize;
+
+        std::vector<VkDescriptorImageInfo> imageInfos(1024);
+        for (size_t j = 0; j < 1024; j++) {
             imageInfos[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            // If the model has fewer than 16 textures, just pad the empty slots with the first texture to prevent driver crashes!
             imageInfos[j].imageView = (j < imageViews.size()) ? imageViews[j] : imageViews[0];
             imageInfos[j].sampler = sampler;
         }
 
-        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        // Increased writes array to 4
+        std::array<VkWriteDescriptorSet, 4> descriptorWrites{};
 
         descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[0].dstSet = descriptorSets[i];
@@ -111,8 +153,25 @@ void Descriptors::updateTextures(const std::vector<VkImageView>& imageViews, VkS
         descriptorWrites[1].dstBinding = 1;
         descriptorWrites[1].dstArrayElement = 0;
         descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[1].descriptorCount = 16; // <--- TELLS THE DRIVER TO UPDATE ALL 16 SLOTS!
+        descriptorWrites[1].descriptorCount = 1024;
         descriptorWrites[1].pImageInfo = imageInfos.data();
+
+        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[2].dstSet = descriptorSets[i];
+        descriptorWrites[2].dstBinding = 2;
+        descriptorWrites[2].dstArrayElement = 0;
+        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrites[2].descriptorCount = 1;
+        descriptorWrites[2].pBufferInfo = &lightInfo;
+
+        // Binding 3: Instance Buffer
+        descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[3].dstSet = descriptorSets[i];
+        descriptorWrites[3].dstBinding = 3;
+        descriptorWrites[3].dstArrayElement = 0;
+        descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[3].descriptorCount = 1;
+        descriptorWrites[3].pBufferInfo = &instanceInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }

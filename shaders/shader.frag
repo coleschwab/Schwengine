@@ -1,48 +1,72 @@
 #version 450
-
-// GLSL requires this extension to use variables to index into an array of samplers!
 #extension GL_EXT_nonuniform_qualifier : enable
 
+// 1. Inputs from Vertex Shader
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragNormal;
-layout(location = 3) in vec3 fragPos;
+layout(location = 3) in vec3 fragPos; // <-- CRITICAL for Bump Maps!
 
-// Binding 1: We now have an ARRAY of 16 textures
+// 2. Global Bindless Texture Array
 layout(binding = 1) uniform sampler2D texSamplers[1024];
 
-// UPDATED: Added mat4 model so the memory layout matches the Vertex shader exactly!
+// 3. 80-byte Push Constant Block
 layout(push_constant) uniform PushConstants {
-    mat4 model; 
+    mat4 model;
     uint textureIndex;
+    uint emissiveIndex;
+    uint aoIndex;
+    uint normalIndex;
 } push;
 
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // Sample the exact texture specified by the sub-mesh
-    uint index = push.textureIndex;
-    vec4 sampledTexture = texture(texSamplers[nonuniformEXT(index)], fragTexCoord);
+    // Safely clamp all indices
+    uint texIdx = push.textureIndex >= 1024 ? 0 : push.textureIndex;
+    uint emissIdx = push.emissiveIndex >= 1024 ? 0 : push.emissiveIndex;
+    uint aoIdx = push.aoIndex >= 1024 ? 0 : push.aoIndex;
+    uint normIdx = push.normalIndex >= 1024 ? 0 : push.normalIndex;
 
-    // MULTIPLY the image texture by the material color (fragColor) passed from C++!
-    vec4 finalBaseColor = sampledTexture * fragColor;
+    // Base Color & Vertex Paint Fallback
+    vec4 baseColor = texture(texSamplers[nonuniformEXT(texIdx)], fragTexCoord);
+    if (texIdx == 0) baseColor *= fragColor; 
+    if (baseColor.a < 0.1) discard;
 
-    // Discard invisible pixels
-    if(finalBaseColor.a < 0.1) {
-        discard;
+    // Ambient Occlusion
+    float ao = 1.0;
+    if (aoIdx != 0) {
+        ao = texture(texSamplers[nonuniformEXT(aoIdx)], fragTexCoord).r;
     }
 
-    // Basic ambient + diffuse lighting using the combined color
-    float ambientStrength = 0.3;
-    vec3 ambient = ambientStrength * finalBaseColor.rgb;
+    // Normal Mapping (Screen-Space Derivatives)
+    vec3 N = normalize(fragNormal);
+    if (normIdx != 0) {
+        vec3 mapNormal = texture(texSamplers[nonuniformEXT(normIdx)], fragTexCoord).rgb * 2.0 - 1.0;
+        vec3 q1  = dFdx(fragPos);
+        vec3 q2  = dFdy(fragPos);
+        vec2 st1 = dFdx(fragTexCoord);
+        vec2 st2 = dFdy(fragTexCoord);
+        vec3 T  = normalize(q1*st2.t - q2*st1.t);
+        vec3 B  = -normalize(cross(N, T));
+        mat3 TBN = mat3(T, B, N);
+        N = normalize(TBN * mapNormal);
+    }
 
-    vec3 norm = normalize(fragNormal);
-    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0)); 
-    
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * finalBaseColor.rgb;
+    // Emissive Glow
+    vec3 emission = vec3(0.0);
+    if (emissIdx != 0) {
+        emission = texture(texSamplers[nonuniformEXT(emissIdx)], fragTexCoord).rgb * 2.5;
+    }
 
-    vec3 result = ambient + diffuse;
+    // Final Lighting Math
+    float ambientStrength = 0.05;
+    vec3 ambient = ambientStrength * baseColor.rgb * ao; 
     
-    outColor = vec4(result, finalBaseColor.a);
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3)); 
+    float diff = max(dot(N, lightDir), 0.0);
+    vec3 diffuse = diff * 0.9 * baseColor.rgb; 
+
+    vec3 result = ambient + diffuse + emission;
+    outColor = vec4(result, baseColor.a);
 }

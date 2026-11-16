@@ -13,9 +13,9 @@ set(SOURCES
     core/Window.cpp
     core/camera.cpp
     math/MathUtils.cpp
-    renderer/VulkanContext.cpp
-    renderer/Pipeline.cpp
-    renderer/Descriptors.cpp
+    core/renderer/VulkanContext.cpp
+    core/renderer/Pipeline.cpp
+    core/renderer/Descriptors.cpp
     vendor/tiny_obj_loader.cpp
     vendor/stb_image.cpp
 )
@@ -23,15 +23,17 @@ set(SOURCES
 set(HEADERS
     core/Window.h
     core/camera.h
+    core/ecs/registry.h
+    core/ecs/components.h
     math/Array.h
     math/Matrix4x4.h
     math/MathUtils.h
     math/Vector2.h
     math/Vector4.h
-    renderer/Vertex.h
-    renderer/VulkanContext.h
-    renderer/Pipeline.h
-    renderer/Descriptors.h
+    core/renderer/Vertex.h
+    core/renderer/VulkanContext.h
+    core/renderer/Pipeline.h
+    core/renderer/Descriptors.h
 )
 
 set(IMGUI_SOURCES
@@ -52,8 +54,8 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     target_precompile_headers(${PROJECT_NAME} PRIVATE pch.h)
     
     # EXEMPT third-party libraries from PCH so MSVC doesn't crash the build
-    set_source_files_properties(renderer/tiny_obj_loader.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    set_source_files_properties(renderer/stb_image.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(vendor/tiny_obj_loader.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(vendor/stb_image.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(${IMGUI_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
@@ -62,9 +64,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/math
     ${CMAKE_CURRENT_SOURCE_DIR}/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/renderer
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE VK_USE_PLATFORM_WIN32_KHR NOMINMAX)

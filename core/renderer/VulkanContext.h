@@ -16,6 +16,7 @@
 #include "Array.h"
 #include "Descriptors.h" 
 #include "Pipeline.h"    
+#include "../ecs/components.h"
 
 constexpr int MAX_SWAPCHAIN_IMAGES = 4;
 
@@ -23,6 +24,9 @@ struct SubMesh {
     uint32_t startIndex;
     uint32_t indexCount;
     uint32_t textureIndex;
+    uint32_t emissiveIndex;
+    uint32_t aoIndex;    
+    uint32_t normalIndex;  
 };
 
 struct SwapChainSupportDetails {
@@ -66,6 +70,13 @@ struct VulkanMesh {
     VkDeviceMemory indexMemory = VK_NULL_HANDLE;
     uint32_t indexCount = 0;
     std::vector<SubMesh> subMeshes;
+};
+
+struct LightBufferObject {
+    PointLight lights[100];
+    int activeLightCount;
+
+    float padding[3];
 };
 
 class Camera;
@@ -153,6 +164,11 @@ private:
     Array<VkBuffer, MAX_SWAPCHAIN_IMAGES> uniformBuffers{};
     Array<VkDeviceMemory, MAX_SWAPCHAIN_IMAGES> uniformBuffersMemory{};
     Array<void*, MAX_SWAPCHAIN_IMAGES> uniformBuffersMapped{};
+    Array<VkBuffer, MAX_SWAPCHAIN_IMAGES> lightBuffers{};
+    Array<VkDeviceMemory, MAX_SWAPCHAIN_IMAGES> lightBuffersMemory{};
+    Array<VkBuffer, MAX_SWAPCHAIN_IMAGES> instanceBuffers{};
+    Array<VkDeviceMemory, MAX_SWAPCHAIN_IMAGES> instanceBuffersMemory{};
+    Array<void*, MAX_SWAPCHAIN_IMAGES> instanceBuffersMapped{};
 
     // Command Management
     VkCommandPool commandPool = VK_NULL_HANDLE;

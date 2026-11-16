@@ -56,3 +56,7 @@ struct Vector4 {
 	}
 	
 };
+
+inline Vector4 operator*(float scalar, const Vector4& v) {
+	return v * scalar;
+}
